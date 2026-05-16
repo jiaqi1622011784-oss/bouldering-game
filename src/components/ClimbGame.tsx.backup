@@ -1,0 +1,689 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useGame } from '../context/GameContext'
+import { useCanvas } from '../hooks/useCanvas'
+import type { Hold, Point } from '../types/hold'
+import { getCanvasRelativePoint } from '../utils/canvasHelpers'
+import { isPointInPolygon } from '../utils/blobDetection'
+import { canReach, computeSimplePose, isCOMStable, midpoint } from '../utils/gamePhysics'
+
+type LimbKey = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot'
+
+interface ClimbGameProps {
+  onBack: () => void
+  onRestart: () => void
+}
+
+interface Transform {
+  scale: number
+  offsetX: number
+  offsetY: number
+}
+
+interface LimbState {
+  pos: Point
+  holdId: string | null
+}
+
+function formatTime(ms: number) {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  const ss = String(s % 60).padStart(2, '0')
+  return `${m}:${ss}`
+}
+
+function applyTransform(p: Point, t: Transform): Point {
+  return { x: p.x * t.scale + t.offsetX, y: p.y * t.scale + t.offsetY }
+}
+
+function computeHoldsBounds(holds: Hold[]) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const h of holds) {
+    for (const p of h.polygon) {
+      minX = Math.min(minX, p.x)
+      minY = Math.min(minY, p.y)
+      maxX = Math.max(maxX, p.x)
+      maxY = Math.max(maxY, p.y)
+    }
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, minY: 0, maxX: 1, maxY: 1 }
+  return { minX, minY, maxX, maxY }
+}
+
+function computeArenaTransform(canvas: HTMLCanvasElement, holds: Hold[]): Transform {
+  const rect = canvas.getBoundingClientRect()
+  const logicalW = rect.width
+  const logicalH = rect.height
+  const bounds = computeHoldsBounds(holds)
+  const w = Math.max(1, bounds.maxX - bounds.minX)
+  const h = Math.max(1, bounds.maxY - bounds.minY)
+
+  const margin = 80
+  const availableW = Math.max(50, logicalW - margin * 2)
+  const availableH = Math.max(50, logicalH - margin * 2)
+  const scale = Math.min(availableW / w, availableH / h)
+
+  const offsetX = (logicalW - w * scale) / 2 - bounds.minX * scale
+  const offsetY = (logicalH - h * scale) / 2 - bounds.minY * scale
+
+  return { scale, offsetX, offsetY }
+}
+
+function transformHold(hold: Hold, t: Transform): Hold {
+  const polygon = hold.polygon.map(p => applyTransform(p, t))
+  const center = applyTransform(hold.center, t)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of polygon) {
+    minX = Math.min(minX, p.x)
+    minY = Math.min(minY, p.y)
+    maxX = Math.max(maxX, p.x)
+    maxY = Math.max(maxY, p.y)
+  }
+  return {
+    ...hold,
+    polygon,
+    center,
+    boundingBox: { minX, minY, maxX, maxY }
+  }
+}
+
+function pickHoldAtPoint(holds: Hold[], p: Point): Hold | null {
+  for (let idx = holds.length - 1; idx >= 0; idx--) {
+    const h = holds[idx]
+    const bb = h.boundingBox
+    if (p.x < bb.minX || p.x > bb.maxX || p.y < bb.minY || p.y > bb.maxY) continue
+    if (isPointInPolygon(p, h.polygon)) return h
+  }
+  return null
+}
+
+function renderHoldSimple(ctx: CanvasRenderingContext2D, hold: Hold) {
+  const poly = hold.polygon
+  if (poly.length < 3) return
+
+  ctx.save()
+  ctx.shadowBlur = 16
+  ctx.shadowColor = hold.glowColor
+
+  ctx.fillStyle = hold.color
+  ctx.beginPath()
+  ctx.moveTo(poly[0].x, poly[0].y)
+  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.strokeStyle = hold.strokeColor
+  ctx.lineWidth = 2
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawMarker(ctx: CanvasRenderingContext2D, center: Point, label: string, color: string) {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 4
+  ctx.beginPath()
+  ctx.arc(center.x, center.y, 16, 0, Math.PI * 2)
+  ctx.stroke()
+
+  ctx.fillStyle = '#0B1220'
+  ctx.beginPath()
+  ctx.arc(center.x, center.y, 12, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.fillStyle = color
+  ctx.font = 'bold 12px system-ui, -apple-system, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(label, center.x, center.y)
+  ctx.restore()
+}
+
+function drawClimber(
+  ctx: CanvasRenderingContext2D,
+  limbs: Record<LimbKey, Point>,
+  color: string,
+  selectedLimb: LimbKey | null,
+  com: Point,
+  hull: Point[] | null
+) {
+  const pose = computeSimplePose(limbs)
+
+  const limbRadius = 10
+  const jointRadius = 6
+  const stroke = color
+  const fill = color
+
+  const drawJoint = (p: Point, isSelected: boolean) => {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, limbRadius, 0, Math.PI * 2)
+    ctx.fillStyle = isSelected ? '#FBBF24' : fill
+    ctx.globalAlpha = isSelected ? 1 : 0.9
+    ctx.fill()
+    ctx.lineWidth = 2
+    ctx.strokeStyle = '#0B1220'
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  const drawSmallJoint = (p: Point) => {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, jointRadius, 0, Math.PI * 2)
+    ctx.fillStyle = '#E5E7EB'
+    ctx.globalAlpha = 0.8
+    ctx.fill()
+    ctx.restore()
+  }
+
+  // 支撑多边形（可视化）
+  if (hull && hull.length >= 3) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.moveTo(hull[0].x, hull[0].y)
+    for (let i = 1; i < hull.length; i++) ctx.lineTo(hull[i].x, hull[i].y)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(34, 211, 238, 0.10)'
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.35)'
+    ctx.lineWidth = 2
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // 骨架
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = stroke
+  ctx.lineWidth = 6
+
+  // 躯干
+  ctx.beginPath()
+  ctx.moveTo(pose.shoulder.x, pose.shoulder.y)
+  ctx.lineTo(pose.hip.x, pose.hip.y)
+  ctx.stroke()
+
+  // 手臂
+  ctx.beginPath()
+  ctx.moveTo(pose.shoulder.x, pose.shoulder.y)
+  ctx.lineTo(limbs.leftHand.x, limbs.leftHand.y)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(pose.shoulder.x, pose.shoulder.y)
+  ctx.lineTo(limbs.rightHand.x, limbs.rightHand.y)
+  ctx.stroke()
+
+  // 腿
+  ctx.beginPath()
+  ctx.moveTo(pose.hip.x, pose.hip.y)
+  ctx.lineTo(limbs.leftFoot.x, limbs.leftFoot.y)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(pose.hip.x, pose.hip.y)
+  ctx.lineTo(limbs.rightFoot.x, limbs.rightFoot.y)
+  ctx.stroke()
+
+  ctx.restore()
+
+  // 头部
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(pose.head.x, pose.head.y, 14, 0, Math.PI * 2)
+  ctx.fillStyle = fill
+  ctx.globalAlpha = 0.9
+  ctx.fill()
+  ctx.lineWidth = 2
+  ctx.strokeStyle = '#0B1220'
+  ctx.stroke()
+  ctx.restore()
+
+  drawSmallJoint(pose.shoulder)
+  drawSmallJoint(pose.hip)
+
+  drawJoint(limbs.leftHand, selectedLimb === 'leftHand')
+  drawJoint(limbs.rightHand, selectedLimb === 'rightHand')
+  drawJoint(limbs.leftFoot, selectedLimb === 'leftFoot')
+  drawJoint(limbs.rightFoot, selectedLimb === 'rightFoot')
+
+  // COM
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(com.x, com.y, 6, 0, Math.PI * 2)
+  ctx.fillStyle = '#F472B6'
+  ctx.fill()
+  ctx.lineWidth = 2
+  ctx.strokeStyle = '#0B1220'
+  ctx.stroke()
+  ctx.restore()
+}
+
+export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
+  const { state } = useGame()
+
+  const rawHolds = state.holds
+  const [arenaTransform, setArenaTransform] = useState<Transform | null>(null)
+
+  const { canvasRef, getContext, resizeCanvas } = useCanvas({
+    onResize: (canvas) => {
+      if (rawHolds.length > 0) {
+        setArenaTransform(computeArenaTransform(canvas, rawHolds))
+      }
+    }
+  })
+
+  const arenaHolds = useMemo(() => {
+    if (!arenaTransform) return []
+    return rawHolds.map(h => transformHold(h, arenaTransform))
+  }, [rawHolds, arenaTransform])
+
+  const [selectedLimb, setSelectedLimb] = useState<LimbKey | null>(null)
+  const [characterColor, setCharacterColor] = useState('#FDE047')
+  const [message, setMessage] = useState<string | null>(null)
+
+  const [startAt, setStartAt] = useState(() => Date.now())
+  const [stepCount, setStepCount] = useState(0)
+  const [nextHoldIndex, setNextHoldIndex] = useState(1)
+  const [finishedAt, setFinishedAt] = useState<number | null>(null)
+  const [fallen, setFallen] = useState(false)
+
+  const [limbs, setLimbs] = useState<Record<LimbKey, LimbState> | null>(null)
+  const draggingRef = useRef<{ limb: LimbKey; prev: LimbState } | null>(null)
+
+  const clearMessageSoon = useCallback(() => {
+    setTimeout(() => setMessage(null), 1600)
+  }, [])
+
+  const resetRound = useCallback(() => {
+    if (arenaHolds.length < 2) return
+
+    const h0 = arenaHolds[0]
+    const h1 = arenaHolds[1] ?? h0
+    const h2 = arenaHolds[2] ?? h0
+
+    setLimbs({
+      leftFoot: { pos: h0.center, holdId: h0.id },
+      rightFoot: { pos: h0.center, holdId: h0.id },
+      leftHand: { pos: h1.center, holdId: h1.id },
+      rightHand: { pos: h2.center, holdId: h2.id },
+    })
+
+    setSelectedLimb(null)
+    setNextHoldIndex(1)
+    setStepCount(0)
+    setFinishedAt(null)
+    setFallen(false)
+    setStartAt(Date.now())
+    setMessage('拖拽手/脚到目标岩点（按顺序攀爬）')
+    const t = setTimeout(() => setMessage(null), 2200)
+    return () => clearTimeout(t)
+  }, [arenaHolds])
+
+  // 当 arena 准备好时初始化/重置
+  useEffect(() => {
+    const cleanup = resetRound()
+    return () => cleanup?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arenaTransform, rawHolds.length])
+
+  const limbPoints: Record<LimbKey, Point> | null = useMemo(() => {
+    if (!limbs) return null
+    return {
+      leftHand: limbs.leftHand.pos,
+      rightHand: limbs.rightHand.pos,
+      leftFoot: limbs.leftFoot.pos,
+      rightFoot: limbs.rightFoot.pos,
+    }
+  }, [limbs])
+
+  const pose = useMemo(() => {
+    if (!limbPoints) return null
+    return computeSimplePose(limbPoints)
+  }, [limbPoints])
+
+  const supportPoints = useMemo(() => {
+    if (!limbs) return [] as Point[]
+    const pts: Point[] = []
+    for (const key of ['leftHand', 'rightHand', 'leftFoot', 'rightFoot'] as const) {
+      if (limbs[key].holdId) pts.push(limbs[key].pos)
+    }
+    return pts
+  }, [limbs])
+
+  const stability = useMemo(() => {
+    if (!pose) return { stable: false, hull: [] as Point[] }
+    return isCOMStable(pose.com, supportPoints)
+  }, [pose, supportPoints])
+
+  const selectLimbByHitTest = useCallback((p: Point): LimbKey | null => {
+    if (!limbPoints) return null
+    const radius = 16
+    const hit = (a: Point) => Math.hypot(a.x - p.x, a.y - p.y) <= radius
+    if (hit(limbPoints.leftHand)) return 'leftHand'
+    if (hit(limbPoints.rightHand)) return 'rightHand'
+    if (hit(limbPoints.leftFoot)) return 'leftFoot'
+    if (hit(limbPoints.rightFoot)) return 'rightFoot'
+    return null
+  }, [limbPoints])
+
+  const evaluateAfterSnap = useCallback((nextLimbs: Record<LimbKey, LimbState>) => {
+    const pts: Record<LimbKey, Point> = {
+      leftHand: nextLimbs.leftHand.pos,
+      rightHand: nextLimbs.rightHand.pos,
+      leftFoot: nextLimbs.leftFoot.pos,
+      rightFoot: nextLimbs.rightFoot.pos,
+    }
+    const nextPose = computeSimplePose(pts)
+    const support: Point[] = []
+    for (const key of ['leftHand', 'rightHand', 'leftFoot', 'rightFoot'] as const) {
+      if (nextLimbs[key].holdId) support.push(nextLimbs[key].pos)
+    }
+
+    const stableCheck = isCOMStable(nextPose.com, support)
+    const uniqueSupport = new Set(support.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)).size
+    const hasThree = uniqueSupport >= 3
+
+    if (!hasThree || !stableCheck.stable) {
+      setFallen(true)
+      setMessage('掉落：重心超出支撑范围/支撑点不足')
+      return false
+    }
+    return true
+  }, [])
+
+  const trySnapMove = useCallback((limb: LimbKey, targetHold: Hold) => {
+    if (!limbs || !pose || fallen || finishedAt) return
+
+    const targetIndex = rawHolds.findIndex(h => h.id === targetHold.id)
+    if (targetIndex === -1) return
+
+    // 按顺序
+    if (targetIndex !== nextHoldIndex) {
+      setMessage(`必须按顺序攀爬：下一点是 #${nextHoldIndex + 1}`)
+      clearMessageSoon()
+      return
+    }
+
+    // 最大伸展距离：随缩放变化（以原逻辑 190/170 为基准）
+    const reachScale = arenaTransform?.scale ?? 1
+    const maxHand = 190 * reachScale
+    const maxFoot = 170 * reachScale
+
+    const shoulder = midpoint(pose.leftHand, pose.rightHand)
+    const hip = midpoint(pose.leftFoot, pose.rightFoot)
+    const anchor = (limb === 'leftHand' || limb === 'rightHand') ? shoulder : hip
+    const maxDist = (limb === 'leftHand' || limb === 'rightHand') ? maxHand : maxFoot
+
+    if (!canReach(anchor, targetHold.center, maxDist)) {
+      setMessage('太远了：超过该肢体最大伸展距离')
+      clearMessageSoon()
+      return
+    }
+
+    const next = {
+      ...limbs,
+      [limb]: { pos: targetHold.center, holdId: targetHold.id }
+    } as Record<LimbKey, LimbState>
+
+    const ok = evaluateAfterSnap(next)
+    if (!ok) return
+
+    setLimbs(next)
+    setStepCount(c => c + 1)
+    setNextHoldIndex(i => i + 1)
+    setSelectedLimb(null)
+
+    if (targetIndex === rawHolds.length - 1) {
+      setFinishedAt(Date.now())
+      setMessage('完成线路！')
+    }
+  }, [
+    limbs,
+    pose,
+    fallen,
+    finishedAt,
+    rawHolds,
+    nextHoldIndex,
+    clearMessageSoon,
+    arenaTransform,
+    evaluateAfterSnap
+  ])
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !limbs || fallen || finishedAt) return
+    const p = getCanvasRelativePoint(canvasRef.current, e.nativeEvent, 1)
+    const limb = selectLimbByHitTest(p)
+    if (!limb) return
+
+    setSelectedLimb(limb)
+    draggingRef.current = { limb, prev: limbs[limb] }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }, [canvasRef, limbs, fallen, finishedAt, selectLimbByHitTest])
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !limbs) return
+    const dragging = draggingRef.current
+    if (!dragging) return
+
+    const p = getCanvasRelativePoint(canvasRef.current, e.nativeEvent, 1)
+    const limb = dragging.limb
+
+    setLimbs(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        [limb]: { pos: p, holdId: null } // 拖拽中视为暂时不“抓稳”
+      }
+    })
+  }, [canvasRef, limbs])
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return
+    const dragging = draggingRef.current
+    if (!dragging) return
+    draggingRef.current = null
+
+    if (!limbs || fallen || finishedAt) return
+
+    const p = getCanvasRelativePoint(canvasRef.current, e.nativeEvent, 1)
+    const hold = pickHoldAtPoint(arenaHolds, p)
+
+    if (!hold) {
+      // 没放到岩点上，回弹
+      setLimbs(prev => {
+        if (!prev) return prev
+        return { ...prev, [dragging.limb]: dragging.prev }
+      })
+      setMessage('请把肢体拖到岩点上')
+      clearMessageSoon()
+      return
+    }
+
+    // 放到岩点上：执行“按顺序 + 伸展 + 重心”判定
+    setLimbs(prev => {
+      if (!prev) return prev
+      return { ...prev, [dragging.limb]: dragging.prev }
+    })
+    trySnapMove(dragging.limb, hold)
+  }, [canvasRef, arenaHolds, limbs, fallen, finishedAt, clearMessageSoon, trySnapMove])
+
+  // 绘制
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const ctx = getContext()
+    if (!canvas || !ctx) return
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return
+
+      // 确保坐标系使用“CSS像素”（避免 DPR/transform 导致绘制面积为 0 或错位）
+      const dprScale = canvas.width / rect.width
+      if (Number.isFinite(dprScale) && dprScale > 0) {
+        ctx.setTransform(dprScale, 0, 0, dprScale, 0, 0)
+      } else {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+      }
+
+      // 清空（用 CSS 像素单位）
+      ctx.clearRect(0, 0, rect.width, rect.height)
+
+      // 背景（抽离后的小游戏界面）
+      ctx.save()
+      ctx.fillStyle = '#DCCCB1' // 类似 Klifur 的浅米色
+      ctx.fillRect(0, 0, rect.width, rect.height)
+      ctx.restore()
+
+      // 岩点
+      arenaHolds.forEach(h => renderHoldSimple(ctx, h))
+
+      // 起点/终点/下一点
+      if (arenaHolds[0]) drawMarker(ctx, arenaHolds[0].center, '起', '#22C55E')
+      if (arenaHolds[arenaHolds.length - 1]) drawMarker(ctx, arenaHolds[arenaHolds.length - 1].center, '终', '#EF4444')
+      if (arenaHolds[nextHoldIndex]) drawMarker(ctx, arenaHolds[nextHoldIndex].center, `${nextHoldIndex + 1}`, '#38BDF8')
+
+      // 角色
+      if (limbPoints && pose) {
+        drawClimber(ctx, limbPoints, characterColor, selectedLimb, pose.com, stability.hull)
+      }
+
+      // 掉落/完成遮罩
+      if (fallen || finishedAt) {
+        ctx.save()
+        ctx.fillStyle = 'rgba(0,0,0,0.55)'
+        ctx.fillRect(0, 0, rect.width, rect.height)
+        ctx.restore()
+      }
+    }
+
+    draw()
+  }, [
+    canvasRef,
+    getContext,
+    arenaHolds,
+    limbPoints,
+    pose,
+    characterColor,
+    selectedLimb,
+    stability.hull,
+    nextHoldIndex,
+    fallen,
+    finishedAt
+  ])
+
+  // 当岩点变化时，强制触发一次 resize -> transform 重新计算（保证抽离布局正确）
+  useEffect(() => {
+    resizeCanvas()
+  }, [rawHolds.length, resizeCanvas])
+
+  const elapsed = (finishedAt ?? Date.now()) - startAt
+  const canPlay = arenaHolds.length > 1 && !!limbs && !!pose
+
+  return (
+    <div className="fixed inset-0 bg-gray-900 text-white flex flex-col">
+      {/* Header */}
+      <div className="bg-gray-800 p-4 border-b border-gray-700">
+        <div className="flex items-center justify-between">
+          <button onClick={onBack} className="p-2 text-gray-400 hover:text-white transition-colors">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+
+          <h1 className="text-lg font-semibold flex items-center gap-2">
+            <span>🧗</span>
+            攀爬游戏（拖拽版 / 基础）
+          </h1>
+
+          <button
+            onClick={onRestart}
+            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+          >
+            新线路
+          </button>
+        </div>
+      </div>
+
+      {/* Canvas */}
+      <div className="flex-1 relative bg-black">
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full"
+          style={{ touchAction: 'none' }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+        />
+
+        {message && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 border border-white/10 px-4 py-2 rounded-lg text-sm">
+            {message}
+          </div>
+        )}
+
+        {(fallen || finishedAt) && (
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="bg-gray-900/90 border border-white/10 rounded-xl p-6 max-w-sm w-full text-center">
+              <h2 className="text-2xl font-semibold mb-2">{fallen ? '掉落了' : '完成线路！'}</h2>
+              <div className="text-gray-300 text-sm space-y-1 mb-5">
+                <div>用时：{formatTime(elapsed)}</div>
+                <div>步数：{stepCount}</div>
+                {!fallen && <div>评分（占位）：{Math.max(0, 1000 - stepCount * 20)}</div>}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={onBack}
+                  className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                >
+                  返回预览
+                </button>
+                <button
+                  onClick={() => resetRound()}
+                  className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg transition-colors"
+                >
+                  重新开始本局
+                </button>
+              </div>
+              <p className="text-gray-500 text-xs mt-3">
+                提示：拖拽手/脚到岩点上，需满足顺序/伸展/重心/三点支撑。
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Control panel */}
+      <div className="bg-gray-800 border-t border-gray-700 p-4">
+        <div className="max-w-md mx-auto space-y-3">
+          <div className="flex items-center justify-between text-sm text-gray-300">
+            <div>下一点：#{Math.min(nextHoldIndex + 1, rawHolds.length)}</div>
+            <div>用时：{formatTime(elapsed)}</div>
+            <div>步数：{stepCount}</div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <label className="text-gray-400">角色颜色</label>
+            <input
+              type="color"
+              value={characterColor}
+              onChange={(e) => setCharacterColor(e.target.value)}
+              className="h-9 w-14 bg-transparent"
+              disabled={!!fallen || !!finishedAt}
+              title="角色颜色"
+            />
+            <div className={`text-xs ${stability.stable ? 'text-green-400' : 'text-red-400'}`}>
+              {stability.stable ? '重心稳定' : '重心不稳'}
+            </div>
+          </div>
+
+          {!canPlay && (
+            <p className="text-xs text-gray-400">
+              需要至少 2 个岩点（起点/终点）才能开始游戏。
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
