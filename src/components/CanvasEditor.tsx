@@ -177,7 +177,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ onComplete, onBack }
 
   // 清空
   const handleClear = useCallback(() => {
-    if (window.confirm('确定要清空所有岩点吗？')) {
+    if (window.confirm('确定要清空所有遗迹石块吗？')) {
       dispatch({ type: 'CLEAR_HOLDS' })
     }
   }, [dispatch])
@@ -185,7 +185,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ onComplete, onBack }
   // 完成编辑
   const handleComplete = useCallback(() => {
     if (state.holds.length === 0) {
-      if (!window.confirm('尚未创建任何岩点，是否继续？')) {
+      if (!window.confirm('尚未标记任何遗迹石块，是否继续？')) {
         return
       }
     }
@@ -215,12 +215,12 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ onComplete, onBack }
 
           <h1 className="text-lg font-semibold flex items-center gap-2">
             <span>✏️</span>
-            描摹岩点
+            标记遗迹石块
           </h1>
 
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-400">
-              {state.holds.length} 个岩点
+              {state.holds.length} 个石块
             </span>
             <button
               onClick={handleUndo}
@@ -345,7 +345,7 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ onComplete, onBack }
               onClick={handleComplete}
               className="flex-1 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-400 hover:to-blue-400 rounded-lg font-medium transition-colors text-white"
             >
-              完成描摹
+              完成标记
             </button>
           </div>
         </div>
@@ -354,8 +354,8 @@ export const CanvasEditor: React.FC<CanvasEditorProps> = ({ onComplete, onBack }
       {state.selectedHoldId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-lg p-6 max-w-sm w-full">
-            <h3 className="text-lg font-semibold mb-4">删除岩点</h3>
-            <p className="text-gray-300 mb-6">确定要删除这个岩点吗？</p>
+            <h3 className="text-lg font-semibold mb-4">删除石块</h3>
+            <p className="text-gray-300 mb-6">确定要删除这个遗迹石块吗？</p>
             <div className="flex gap-2">
               <button
                 onClick={() => dispatch({ type: 'SELECT_HOLD', payload: null })}

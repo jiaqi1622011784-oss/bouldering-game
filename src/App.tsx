@@ -31,23 +31,27 @@ const AppContent: React.FC = () => {
     dispatch({ type: 'SET_STAGE', payload: 'game' })
   }
 
+  const handleMiniGameComplete = (result: { success: boolean; collectedFragments: number; progress: number }) => {
+    console.info('Archaeology climb mini-game complete:', result)
+  }
+
   const handleBackToCamera = () => {
-    // 回到拍照/上传页面（保留当前图片与岩点，方便用户切回；如需清空请用“创建新线路”）
+    // 回到采集页面（保留当前图片与遗迹石块，方便用户切回；如需清空请用“创建新岩壁”）
     dispatch({ type: 'SET_STAGE', payload: 'camera' })
   }
 
   const handleRestart = () => {
-    if (window.confirm('确定要开始新的线路吗？当前进度将会丢失。')) {
+    if (window.confirm('确定要创建新的遗迹岩壁吗？当前勘探进度将会丢失。')) {
       dispatch({ type: 'RESET' })
     }
   }
 
   if (!mounted) {
-    return <div className="min-h-screen bg-gray-900" />
+    return <div className="min-h-screen museum-shell" />
   }
 
   return (
-    <div className="h-screen bg-gray-900 text-white">
+    <div className="h-screen museum-shell">
       <div className="flex flex-col h-full pb-4">
         <StageIndicator />
 
@@ -78,6 +82,7 @@ const AppContent: React.FC = () => {
             <ClimbGame
               onBack={() => dispatch({ type: 'SET_STAGE', payload: 'preview' })}
               onRestart={handleRestart}
+              onComplete={handleMiniGameComplete}
             />
           )}
         </div>

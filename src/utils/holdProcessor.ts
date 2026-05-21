@@ -19,12 +19,12 @@ const DEFAULT_OPTIONS: Required<HoldGenerationOptions> = {
   targetVertexCount: 12,
   deformationIntensity: 0.1,
   colorPalette: [
-    '#39FF14', // 荧光绿
-    '#FF26D9', // 荧光粉
-    '#26D9FF', // 荧光蓝
-    '#FF8C26', // 荧光橙
-    '#D926FF', // 荧光紫
-    '#FFEB26', // 荧光黄
+    '#8B7355', // 风化石块
+    '#A68A64', // 古砖
+    '#6F6254', // 裂隙岩面
+    '#B18B52', // 暗金沙土
+    '#7C6B58', // 石灰残片
+    '#C49A4A', // 符文碎片
   ],
 }
 

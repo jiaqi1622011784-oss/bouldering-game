@@ -1,12 +1,14 @@
 import React, { createContext, useContext, useReducer, ReactNode } from 'react'
 import { GameState, Hold, Point } from '../types/hold'
 import { HoldGenerationOptions, generateHold } from '../utils/holdProcessor'
+import { archaeologyLevels } from '../utils/defaultRoute'
 
 // 初始状态
 const initialState: GameState = {
-  stage: 'camera',
+  stage: 'preview',
   backgroundImage: null,
-  holds: [],
+  holds: archaeologyLevels[0].holds,
+  currentLevelIndex: 0,
   drawing: {
     isDrawing: false,
     currentPath: null,
@@ -31,6 +33,8 @@ type Action =
   | { type: 'SET_TOOL'; payload: 'brush' | 'eraser' }
   | { type: 'CLEAR_HOLDS' }
   | { type: 'LOAD_STATE'; payload: Partial<GameState> }
+  | { type: 'SET_LEVEL'; payload: number }
+  | { type: 'NEXT_LEVEL' }
   | { type: 'RESET' }
 
 // Reducer
@@ -46,8 +50,32 @@ function gameReducer(state: GameState, action: Action): GameState {
       return {
         ...state,
         backgroundImage: action.payload,
-        holds: action.payload === null ? [] : state.holds
+        holds: action.payload === null ? archaeologyLevels[state.currentLevelIndex]?.holds ?? [] : state.holds
       }
+
+    case 'SET_LEVEL': {
+      const levelIndex = Math.max(0, Math.min(archaeologyLevels.length - 1, action.payload))
+      return {
+        ...state,
+        currentLevelIndex: levelIndex,
+        backgroundImage: null,
+        holds: archaeologyLevels[levelIndex].holds,
+        selectedHoldId: null,
+        stage: 'preview',
+      }
+    }
+
+    case 'NEXT_LEVEL': {
+      const levelIndex = Math.min(archaeologyLevels.length - 1, state.currentLevelIndex + 1)
+      return {
+        ...state,
+        currentLevelIndex: levelIndex,
+        backgroundImage: null,
+        holds: archaeologyLevels[levelIndex].holds,
+        selectedHoldId: null,
+        stage: 'preview',
+      }
+    }
 
     case 'START_DRAWING':
       return {

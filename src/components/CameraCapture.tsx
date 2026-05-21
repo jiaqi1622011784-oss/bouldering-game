@@ -226,7 +226,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
           </button>
 
           <h1 className="text-lg font-semibold">
-            {mode === 'camera' ? '拍照' : '上传图片'}
+            {mode === 'camera' ? '采集岩壁' : '上传遗迹岩壁'}
           </h1>
 
           <button
@@ -256,7 +256,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
-              拍照
+              拍摄
             </div>
           </button>
 
@@ -318,7 +318,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
                 <p className="text-gray-400 text-center px-4">
-                  点击上传图片
+                  点击上传遗迹岩壁图片
                 </p>
                 <p className="text-gray-500 text-sm mt-2">
                   支持 JPG, PNG 格式
@@ -369,8 +369,8 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({
       <div className="bg-gray-800 p-3 border-t border-gray-700">
         <p className="text-center text-gray-400 text-sm">
           {mode === 'camera'
-            ? '对准抱石墙，点击白色按钮拍照'
-            : '请选择一张清晰的抱石墙照片'}
+            ? '对准遗迹岩壁，点击白色按钮采集'
+            : '请选择一张清晰的岩壁或遗迹照片'}
         </p>
       </div>
     </div>

@@ -4,6 +4,8 @@ import { useCanvas } from '../hooks/useCanvas'
 import { renderHold } from '../utils/holdProcessor'
 import { loadImageToCanvas } from '../utils/canvasHelpers'
 import { ExportData } from '../types/game'
+import type { Hold } from '../types/hold'
+import { archaeologyLevels } from '../utils/defaultRoute'
 
 interface PreviewProps {
   onBack: () => void
@@ -11,10 +13,68 @@ interface PreviewProps {
   onStartGame: () => void
 }
 
+function drawPreviewWall(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, height)
+  gradient.addColorStop(0, '#EEE3D2')
+  gradient.addColorStop(0.55, '#D9C2A3')
+  gradient.addColorStop(1, '#B99362')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.save()
+  ctx.strokeStyle = 'rgba(73, 48, 31, 0.28)'
+  ctx.lineWidth = 2
+  for (let y = 52; y < height; y += 72) {
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(width, y + Math.sin(y) * 8)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function fitHoldsToPreview(holds: Hold[], width: number, height: number): Hold[] {
+  if (holds.length === 0) return []
+
+  const minX = Math.min(...holds.flatMap(hold => hold.polygon.map(point => point.x)))
+  const minY = Math.min(...holds.flatMap(hold => hold.polygon.map(point => point.y)))
+  const maxX = Math.max(...holds.flatMap(hold => hold.polygon.map(point => point.x)))
+  const maxY = Math.max(...holds.flatMap(hold => hold.polygon.map(point => point.y)))
+  const routeWidth = Math.max(1, maxX - minX)
+  const routeHeight = Math.max(1, maxY - minY)
+  const margin = 42
+  const scale = Math.min((width - margin * 2) / routeWidth, (height - margin * 2) / routeHeight)
+  const offsetX = (width - routeWidth * scale) / 2 - minX * scale
+  const offsetY = (height - routeHeight * scale) / 2 - minY * scale
+
+  return holds.map(hold => {
+    const polygon = hold.polygon.map(point => ({
+      x: point.x * scale + offsetX,
+      y: point.y * scale + offsetY,
+    }))
+    const center = {
+      x: hold.center.x * scale + offsetX,
+      y: hold.center.y * scale + offsetY,
+    }
+    return {
+      ...hold,
+      polygon,
+      center,
+      boundingBox: {
+        minX: Math.min(...polygon.map(point => point.x)),
+        minY: Math.min(...polygon.map(point => point.y)),
+        maxX: Math.max(...polygon.map(point => point.x)),
+        maxY: Math.max(...polygon.map(point => point.y)),
+      },
+    }
+  })
+}
+
 export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame }) => {
-  const { state } = useGame()
+  const { state, dispatch } = useGame()
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
+  const currentLevel = archaeologyLevels[state.currentLevelIndex] ?? archaeologyLevels[0]
 
   const { canvasRef } = useCanvas({
     onResize: (canvas) => {
@@ -31,11 +91,14 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
+    const rect = canvas.getBoundingClientRect()
 
     // 清空并绘制背景
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     if (state.backgroundImage) {
       loadImageToCanvas(canvas, state.backgroundImage, { fit: 'contain' })
+    } else {
+      drawPreviewWall(ctx, rect.width, rect.height)
     }
 
     // 使用 requestAnimationFrame 创建动画效果
@@ -51,11 +114,16 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       if (state.backgroundImage) {
         loadImageToCanvas(canvas, state.backgroundImage, { fit: 'contain' })
+      } else {
+        drawPreviewWall(ctx, rect.width, rect.height)
       }
+      const previewHolds = state.backgroundImage
+        ? state.holds
+        : fitHoldsToPreview(state.holds, rect.width, rect.height)
 
       // 绘制岩点（带入场动画）
-      state.holds.forEach((hold, index) => {
-        const holdProgress = Math.max(0, (easeProgress * state.holds.length - index) / 1)
+      previewHolds.forEach((hold, index) => {
+        const holdProgress = Math.max(0, (easeProgress * previewHolds.length - index) / 1)
         if (holdProgress > 0) {
           ctx.save()
           ctx.globalAlpha = holdProgress
@@ -76,7 +144,7 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
       // 绘制编号
       if (progress > 0.5) {
         const textProgress = (progress - 0.5) * 2
-        state.holds.forEach((hold, index) => {
+        previewHolds.forEach((hold, index) => {
           ctx.save()
           ctx.globalAlpha = textProgress
           ctx.fillStyle = '#FFFFFF'
@@ -175,13 +243,13 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
   const totalHolds = state.holds.length
 
   return (
-    <div className="fixed inset-0 bg-gray-900 text-white flex flex-col">
+    <div className="fixed inset-0 museum-shell flex flex-col">
       {/* Header */}
-      <div className="bg-gray-800 p-4 border-b border-gray-700">
+      <div className="museum-header p-4 border-b">
         <div className="flex items-center justify-between">
           <button
             onClick={onBack}
-            className="p-2 text-gray-400 hover:text-white transition-colors"
+            className="p-2 text-[#6b4a2f] hover:text-[#3a2a1e] transition-colors"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -189,8 +257,7 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
           </button>
 
           <h1 className="text-lg font-semibold flex items-center gap-2">
-            <span>👁️</span>
-            预览保存
+            岩壁勘探
           </h1>
 
           <div className="w-10" /> {/* Spacer */}
@@ -198,40 +265,58 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
       </div>
 
       {/* Canvas Area */}
-      <div className="flex-1 relative bg-black">
+      <div className="flex-1 relative bg-[#efe5d3]">
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
       </div>
 
       {/* Info Panel */}
-      <div className="bg-gray-800 p-4 border-t border-gray-700">
+      <div className="museum-panel p-4 border-t">
         <div className="text-center mb-4">
-          <h2 className="text-xl font-semibold mb-2">已完成！</h2>
-          <div className="flex justify-center gap-4 text-sm text-gray-400">
-            <span>岩点数量: {totalHolds}</span>
-            {totalHolds > 0 && <span>颜色: {new Set(state.holds.map(h => h.color)).size} 种</span>}
+          <h2 className="text-xl font-semibold mb-2">{currentLevel.title}</h2>
+          <p className="text-sm text-[#715f4c] mb-2">{currentLevel.subtitle}</p>
+          <div className="flex justify-center gap-4 text-sm text-[#715f4c]">
+            <span>遗迹石块: {totalHolds}</span>
+            {totalHolds > 0 && <span>石刻线索: {Math.max(0, totalHolds - 1)}</span>}
           </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 mb-4">
+          {archaeologyLevels.map((level, index) => (
+            <button
+              key={level.id}
+              type="button"
+              onClick={() => dispatch({ type: 'SET_LEVEL', payload: index })}
+              className={`py-2 px-2 text-sm rounded-lg border transition-colors ${
+                index === state.currentLevelIndex
+                  ? 'bg-[#b27a39] text-[#fff8ec] border-[#6f4f34]'
+                  : 'bg-[#efe4d2] text-[#3a2a1e] border-[#6f4f34]/35 hover:bg-[#e4d4bf]'
+              }`}
+            >
+              第 {index + 1} 关
+            </button>
+          ))}
         </div>
 
         {/* Action Buttons */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <button
             onClick={handleEdit}
-            className="py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+            className="py-3 museum-button flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
-            重新编辑
+            调整石块
           </button>
 
           <button
             onClick={handleExport}
-            className="py-3 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+            className="py-3 museum-button flex items-center justify-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            导出JSON
+            导出线索
           </button>
         </div>
 
@@ -239,11 +324,10 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
         <button
           onClick={onStartGame}
           disabled={totalHolds < 2}
-          className="w-full mb-3 py-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-400 hover:to-green-400 disabled:from-gray-700 disabled:to-gray-700 disabled:opacity-60 disabled:cursor-not-allowed"
-          title={totalHolds < 2 ? '请先在描摹页面添加至少两个岩点（起点/终点）' : undefined}
+          className="w-full mb-3 py-4 museum-button-primary disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          title={totalHolds < 2 ? '请先在描摹页面添加至少两个遗迹石块（营地/入口）' : undefined}
         >
-          <span className="text-lg">🧗</span>
-          开始游戏
+          开始勘探
         </button>
 
         {/* Save Button */}
@@ -252,8 +336,8 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
           disabled={isSaving}
           className={`w-full py-4 rounded-lg font-medium transition-all flex items-center justify-center gap-2 ${
             saveSuccess
-              ? 'bg-green-600 text-white'
-              : 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700'
+              ? 'bg-[#8a9a58] text-[#fff8ec] border border-[#59663a]'
+              : 'museum-button-primary disabled:opacity-60'
           }`}
         >
           {isSaving ? (
@@ -266,14 +350,14 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              已保存！
+              已保存
             </>
           ) : (
             <>
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
               </svg>
-              保存到本地
+              保存岩壁
             </>
           )}
         </button>
@@ -281,12 +365,12 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
         {/* New Route Button */}
         <button
           onClick={onRestart}
-          className="w-full mt-3 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+          className="w-full mt-3 py-3 museum-button flex items-center justify-center gap-2"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          创建新线路
+          创建新岩壁
         </button>
       </div>
 
@@ -294,7 +378,7 @@ export const Preview: React.FC<PreviewProps> = ({ onBack, onRestart, onStartGame
       {state.holds.length === 0 && (
         <div className="bg-yellow-900/20 border-t border-yellow-600/30 p-3">
           <p className="text-yellow-200 text-sm text-center">
-            💡 提示：你可以回到编辑页面添加岩点，或者重新开始
+            提示：你可以回到编辑页面添加遗迹石块，或者重新开始
           </p>
         </div>
       )}

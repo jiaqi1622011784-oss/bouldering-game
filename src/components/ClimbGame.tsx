@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useGame } from '../context/GameContext'
+import { GameProvider, useGame } from '../context/GameContext'
 import { useCanvas } from '../hooks/useCanvas'
 import type { Hold, Point } from '../types/hold'
 import { getCanvasRelativePoint } from '../utils/canvasHelpers'
 import { isCOMStable } from '../utils/gamePhysics'
+import { archaeologyLevels } from '../utils/defaultRoute'
 
 type LimbKey = 'leftHand' | 'rightHand' | 'leftFoot' | 'rightFoot'
 
 interface ClimbGameProps {
   onBack: () => void
   onRestart: () => void
+  onComplete?: (result: { success: boolean; collectedFragments: number; progress: number }) => void
 }
 
 interface Transform {
@@ -89,6 +91,13 @@ function lerp(a: number, b: number, t: number) {
 
 function lerpPoint(a: Point, b: Point, t: number): Point {
   return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) }
+}
+
+function clampPointToReach(root: Point, target: Point, maxReach: number): Point {
+  const d = dist(root, target)
+  if (d <= maxReach) return target
+  const dir = normalize(sub(target, root))
+  return add(root, mul(dir, maxReach))
 }
 
 function angleToDistance(aLen: number, bLen: number, thetaRad: number) {
@@ -172,18 +181,26 @@ function renderHoldSimple(ctx: CanvasRenderingContext2D, hold: Hold) {
   if (poly.length < 3) return
 
   ctx.save()
-  ctx.shadowBlur = 16
-  ctx.shadowColor = hold.glowColor
+  ctx.shadowBlur = 6
+  ctx.shadowColor = 'rgba(61, 45, 30, 0.35)'
 
-  ctx.fillStyle = hold.color
+  const shade = Math.abs(Math.round(hold.center.x + hold.center.y)) % 4
+  ctx.fillStyle = ['#8B7355', '#A68A64', '#766653', '#B08A55'][shade]
   ctx.beginPath()
   ctx.moveTo(poly[0].x, poly[0].y)
   for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y)
   ctx.closePath()
   ctx.fill()
 
-  ctx.strokeStyle = hold.strokeColor
+  ctx.strokeStyle = '#3B3025'
   ctx.lineWidth = 2
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(245, 222, 179, 0.28)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(hold.center.x - 9, hold.center.y - 3)
+  ctx.lineTo(hold.center.x + 8, hold.center.y + 2)
   ctx.stroke()
   ctx.restore()
 }
@@ -206,6 +223,76 @@ function drawMarker(ctx: CanvasRenderingContext2D, center: Point, label: string,
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(label, center.x, center.y)
+  ctx.restore()
+}
+
+function drawRuinsBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const gradient = ctx.createLinearGradient(0, 0, 0, height)
+  gradient.addColorStop(0, '#F1E8DA')
+  gradient.addColorStop(0.45, '#D5BE9B')
+  gradient.addColorStop(1, '#B68D5F')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, width, height)
+
+  ctx.save()
+  ctx.globalAlpha = 0.28
+  ctx.strokeStyle = '#5C4028'
+  ctx.lineWidth = 2
+  for (let y = 56; y < height; y += 74) {
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(width, y + Math.sin(y) * 10)
+    ctx.stroke()
+  }
+  for (let x = 48; x < width; x += 86) {
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x + Math.sin(x) * 14, height)
+    ctx.stroke()
+  }
+  ctx.restore()
+
+  ctx.save()
+  ctx.strokeStyle = 'rgba(55, 38, 26, 0.48)'
+  ctx.lineWidth = 3
+  const cracks = [
+    [{ x: width * 0.18, y: height * 0.18 }, { x: width * 0.23, y: height * 0.28 }, { x: width * 0.19, y: height * 0.41 }],
+    [{ x: width * 0.78, y: height * 0.24 }, { x: width * 0.72, y: height * 0.33 }, { x: width * 0.80, y: height * 0.49 }],
+    [{ x: width * 0.48, y: height * 0.58 }, { x: width * 0.43, y: height * 0.68 }, { x: width * 0.50, y: height * 0.79 }],
+  ]
+  for (const crack of cracks) {
+    ctx.beginPath()
+    ctx.moveTo(crack[0].x, crack[0].y)
+    for (let i = 1; i < crack.length; i++) ctx.lineTo(crack[i].x, crack[i].y)
+    ctx.stroke()
+  }
+  ctx.restore()
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(197, 150, 81, 0.16)'
+  ctx.strokeStyle = 'rgba(74, 55, 35, 0.42)'
+  ctx.lineWidth = 2
+  ctx.strokeRect(width * 0.5 - 54, 18, 108, 60)
+  ctx.fillRect(width * 0.5 - 50, 22, 100, 56)
+  ctx.fillStyle = 'rgba(48, 37, 28, 0.42)'
+  ctx.font = 'bold 18px serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('古墓入口', width * 0.5, 56)
+  ctx.restore()
+}
+
+function drawFragment(ctx: CanvasRenderingContext2D, center: Point, collected: boolean) {
+  if (collected) return
+  ctx.save()
+  ctx.translate(center.x + 26, center.y - 24)
+  ctx.rotate(Math.PI / 4)
+  ctx.shadowBlur = 14
+  ctx.shadowColor = '#FBBF24'
+  ctx.fillStyle = '#D6A13D'
+  ctx.strokeStyle = '#4B371F'
+  ctx.lineWidth = 2
+  ctx.fillRect(-8, -8, 16, 16)
+  ctx.strokeRect(-8, -8, 16, 16)
   ctx.restore()
 }
 
@@ -267,6 +354,8 @@ function drawRig(
   stable: boolean,
   color: string,
   draggingLimb: LimbKey | null,
+  maxArmReach: number,
+  maxLegReach: number,
   dragHint?: { limb: LimbKey; root: Point; target: Point; reachable: boolean }
 ) {
   // 支撑多边形
@@ -298,6 +387,10 @@ function drawRig(
   }
 
   const stroke = color
+  const leftHandPos = clampPointToReach(rig.shoulder, rig.limbs.leftHand.pos, maxArmReach)
+  const rightHandPos = clampPointToReach(rig.shoulder, rig.limbs.rightHand.pos, maxArmReach)
+  const leftFootPos = clampPointToReach(rig.hip, rig.limbs.leftFoot.pos, maxLegReach)
+  const rightFootPos = clampPointToReach(rig.hip, rig.limbs.rightFoot.pos, maxLegReach)
   const drawBone = (a: Point, b: Point, width = 6) => {
     ctx.save()
     ctx.strokeStyle = stroke
@@ -315,15 +408,15 @@ function drawRig(
 
   // 手臂
   drawBone(rig.shoulder, rig.leftElbow)
-  drawBone(rig.leftElbow, rig.limbs.leftHand.pos)
+  drawBone(rig.leftElbow, leftHandPos)
   drawBone(rig.shoulder, rig.rightElbow)
-  drawBone(rig.rightElbow, rig.limbs.rightHand.pos)
+  drawBone(rig.rightElbow, rightHandPos)
 
   // 腿
   drawBone(rig.hip, rig.leftKnee)
-  drawBone(rig.leftKnee, rig.limbs.leftFoot.pos)
+  drawBone(rig.leftKnee, leftFootPos)
   drawBone(rig.hip, rig.rightKnee)
-  drawBone(rig.rightKnee, rig.limbs.rightFoot.pos)
+  drawBone(rig.rightKnee, rightFootPos)
 
   // 头
   ctx.save()
@@ -350,10 +443,10 @@ function drawRig(
   }
 
   // 端点
-  drawJoint(rig.limbs.leftHand.pos, 11, draggingLimb === 'leftHand' ? '#FBBF24' : color)
-  drawJoint(rig.limbs.rightHand.pos, 11, draggingLimb === 'rightHand' ? '#FBBF24' : color)
-  drawJoint(rig.limbs.leftFoot.pos, 11, draggingLimb === 'leftFoot' ? '#FBBF24' : color)
-  drawJoint(rig.limbs.rightFoot.pos, 11, draggingLimb === 'rightFoot' ? '#FBBF24' : color)
+  drawJoint(leftHandPos, 11, draggingLimb === 'leftHand' ? '#FBBF24' : color)
+  drawJoint(rightHandPos, 11, draggingLimb === 'rightHand' ? '#FBBF24' : color)
+  drawJoint(leftFootPos, 11, draggingLimb === 'leftFoot' ? '#FBBF24' : color)
+  drawJoint(rightFootPos, 11, draggingLimb === 'rightFoot' ? '#FBBF24' : color)
 
   // 内部关节
   drawJoint(rig.leftElbow, 6, '#E5E7EB')
@@ -370,30 +463,55 @@ function drawRig(
 // ----------------------------
 // 主组件：响应式拖拽攀爬
 // ----------------------------
-export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
-  const { state } = useGame()
+export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart, onComplete }) => {
+  const { state, dispatch } = useGame()
   const rawHolds = state.holds
+  const currentLevel = archaeologyLevels[state.currentLevelIndex] ?? archaeologyLevels[0]
+  const isLastLevel = state.currentLevelIndex >= archaeologyLevels.length - 1
 
-  const [characterColor, setCharacterColor] = useState('#FDE047')
+  const [characterColor, setCharacterColor] = useState('#D6A13D')
   const [message, setMessage] = useState<string | null>(null)
   const [finishedAt, setFinishedAt] = useState<number | null>(null)
+  const [failedAt, setFailedAt] = useState<number | null>(null)
   const [startAt, setStartAt] = useState(() => Date.now())
   const [stepCount, setStepCount] = useState(0)
   const [nextHoldIndex, setNextHoldIndex] = useState(1)
+  const [missCount, setMissCount] = useState(0)
+  const [collectedFragments, setCollectedFragments] = useState<Set<string>>(() => new Set())
 
   const [arenaTransform, setArenaTransform] = useState<Transform | null>(null)
-  const { canvasRef, getContext, resizeCanvas } = useCanvas({
-    onResize: (canvas) => {
-      if (rawHolds.length > 0) {
-        setArenaTransform(computeArenaTransform(canvas, rawHolds))
-      }
+  const handleArenaResize = useCallback((canvas: HTMLCanvasElement) => {
+    if (rawHolds.length > 0) {
+      setArenaTransform(computeArenaTransform(canvas, rawHolds))
     }
+  }, [rawHolds])
+  const { canvasRef, getContext, resizeCanvas } = useCanvas({
+    onResize: handleArenaResize
   })
 
   const arenaHolds = useMemo(() => {
     if (!arenaTransform) return []
     return rawHolds.map(h => transformHold(h, arenaTransform))
   }, [rawHolds, arenaTransform])
+
+  const fragmentTargetIds = useMemo(() => {
+    if (rawHolds.length < 5) return new Set<string>()
+    const indexes = [
+      Math.floor(rawHolds.length * 0.35),
+      Math.floor(rawHolds.length * 0.6),
+      Math.floor(rawHolds.length * 0.82),
+    ]
+    return new Set(indexes.map(i => rawHolds[clamp(i, 1, rawHolds.length - 2)]?.id).filter(Boolean))
+  }, [rawHolds])
+
+  const reachForLimb = useCallback((limb: LimbKey) => {
+    const s = arenaTransform?.scale ?? 1
+    return (limb === 'leftHand' || limb === 'rightHand') ? 136 * s : 154 * s
+  }, [arenaTransform?.scale])
+
+  const rootForLimb = useCallback((rig: RigState, limb: LimbKey) => {
+    return (limb === 'leftHand' || limb === 'rightHand') ? rig.shoulder : rig.hip
+  }, [])
 
   // 单指拖拽（始终只允许一个 limb 被拖拽）
   const draggingRef = useRef<{
@@ -402,6 +520,7 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
     startPos: Point
     startHoldId: string | null
   } | null>(null)
+  const lastPickedLimbRef = useRef<LimbKey | null>(null)
 
   // 主数据：使用 ref，避免高频 setState
   const rigRef = useRef<RigState | null>(null)
@@ -422,10 +541,11 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
 
     const h0 = arenaHolds[0]
     const h1 = arenaHolds[1] ?? h0
-    const h2 = arenaHolds[2] ?? h0
+    const h2 = arenaHolds[2] ?? h1
+    const h3 = arenaHolds[3] ?? h2
 
     const torsoLen = 95 * s
-    const shoulder = midpoint(h1.center, h2.center)
+    const shoulder = midpoint(h2.center, h3.center)
     const hip = add(shoulder, { x: 0, y: torsoLen })
     const head = add(shoulder, { x: 0, y: -35 * s })
 
@@ -433,25 +553,38 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
       shoulder,
       hip,
       head,
-      leftElbow: midpoint(shoulder, h1.center),
-      rightElbow: midpoint(shoulder, h2.center),
+      leftElbow: midpoint(shoulder, h2.center),
+      rightElbow: midpoint(shoulder, h3.center),
       leftKnee: midpoint(hip, h0.center),
-      rightKnee: midpoint(hip, h0.center),
+      rightKnee: midpoint(hip, h1.center),
       limbs: {
-        leftHand: { pos: h1.center, holdId: h1.id, lastStablePos: h1.center },
-        rightHand: { pos: h2.center, holdId: h2.id, lastStablePos: h2.center },
+        leftHand: { pos: h2.center, holdId: h2.id, lastStablePos: h2.center },
+        rightHand: { pos: h3.center, holdId: h3.id, lastStablePos: h3.center },
         leftFoot: { pos: h0.center, holdId: h0.id, lastStablePos: h0.center },
-        rightFoot: { pos: h0.center, holdId: h0.id, lastStablePos: h0.center },
+        rightFoot: { pos: h1.center, holdId: h1.id, lastStablePos: h1.center },
       }
     }
 
     setFinishedAt(null)
+    setFailedAt(null)
     setStartAt(Date.now())
     setStepCount(0)
-    setNextHoldIndex(1)
-    setMessage('拖拽手/脚：靠近岩点会自动吸附（<20px）')
+    setMissCount(0)
+    setCollectedFragments(new Set())
+    setNextHoldIndex(Math.min(4, rawHolds.length - 1))
+    setMessage('拖拽手脚到可触及的遗迹石块，过远会被绳索限制')
     window.setTimeout(() => setMessage(null), 1800)
-  }, [arenaHolds, arenaTransform?.scale])
+  }, [arenaHolds, arenaTransform?.scale, rawHolds.length])
+
+  const handleWin = useCallback((fragmentCount: number) => {
+    setFinishedAt(Date.now())
+    setMessage('古墓机关已被激活。')
+    onComplete?.({
+      success: true,
+      collectedFragments: fragmentCount,
+      progress: 100,
+    })
+  }, [onComplete])
 
   // 初始化一次
   const hasInitialized = useRef(false)
@@ -470,22 +603,28 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
   // 命中：四肢端点
   const hitTestLimb = useCallback((p: Point, rig: RigState): LimbKey | null => {
     const r = 18
-    const hit = (a: Point) => dist(a, p) <= r
-    if (hit(rig.limbs.leftHand.pos)) return 'leftHand'
-    if (hit(rig.limbs.rightHand.pos)) return 'rightHand'
-    if (hit(rig.limbs.leftFoot.pos)) return 'leftFoot'
-    if (hit(rig.limbs.rightFoot.pos)) return 'rightFoot'
-    return null
+    const keys: LimbKey[] = ['leftHand', 'rightHand', 'leftFoot', 'rightFoot']
+    const hits = keys
+      .map(limb => ({ limb, distance: dist(rig.limbs[limb].pos, p) }))
+      .filter(hit => hit.distance <= r)
+      .sort((a, b) => a.distance - b.distance)
+
+    if (hits.length === 0) return null
+    if (hits.length === 1) return hits[0].limb
+
+    const lastIndex = hits.findIndex(hit => hit.limb === lastPickedLimbRef.current)
+    return hits[(lastIndex + 1) % hits.length].limb
   }, [])
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current || finishedAt) return
+    if (!canvasRef.current || finishedAt || failedAt) return
     const rig = rigRef.current
     if (!rig) return
 
     const p = getCanvasRelativePoint(canvasRef.current, e.nativeEvent, 1)
     const limb = hitTestLimb(p, rig)
     if (!limb) return
+    lastPickedLimbRef.current = limb
 
     draggingRef.current = {
       pointerId: e.pointerId,
@@ -497,7 +636,7 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
     // 拖拽时视为暂时未抓稳
     rig.limbs[limb].holdId = null
     e.currentTarget.setPointerCapture(e.pointerId)
-  }, [canvasRef, finishedAt, hitTestLimb])
+  }, [canvasRef, failedAt, finishedAt, hitTestLimb])
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return
@@ -506,8 +645,9 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
     if (!rig || !dragging || dragging.pointerId !== e.pointerId) return
 
     const p = getCanvasRelativePoint(canvasRef.current, e.nativeEvent, 1)
-    rig.limbs[dragging.limb].pos = p
-  }, [canvasRef])
+    const root = rootForLimb(rig, dragging.limb)
+    rig.limbs[dragging.limb].pos = clampPointToReach(root, p, reachForLimb(dragging.limb))
+  }, [canvasRef, reachForLimb, rootForLimb])
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return
@@ -524,18 +664,34 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
     const hold = nearestHoldWithin(arenaHolds, p, snapRadius)
 
     if (hold) {
+      const root = rootForLimb(rig, limb)
+      if (dist(root, hold.center) > reachForLimb(limb) + snapRadius) {
+        const fallback = dragging.startHoldId ? rig.limbs[limb].lastStablePos : dragging.startPos
+        rig.limbs[limb].pos = fallback
+        rig.limbs[limb].holdId = dragging.startHoldId
+        setMessage('距离太远，绳索限制了这次伸展')
+        clearMessageSoon()
+        return
+      }
+
       rig.limbs[limb].pos = hold.center
       rig.limbs[limb].holdId = hold.id
       rig.limbs[limb].lastStablePos = hold.center
 
       // 进度：只在抓到“下一点”时推进（不限制玩家抓其它点用于调整）
       const targetIndex = rawHolds.findIndex(h => h.id === hold.id)
+      const nextFragments = new Set(collectedFragments)
+      if (fragmentTargetIds.has(hold.id) && !nextFragments.has(hold.id)) {
+        nextFragments.add(hold.id)
+        setCollectedFragments(nextFragments)
+        setMessage(`发现文明残片：${nextFragments.size}/${fragmentTargetIds.size}`)
+        clearMessageSoon()
+      }
       if (targetIndex === nextHoldIndex) {
         setStepCount(c => c + 1)
         setNextHoldIndex(i => i + 1)
         if (targetIndex === rawHolds.length - 1) {
-          setFinishedAt(Date.now())
-          setMessage('完成线路！')
+          handleWin(nextFragments.size)
         }
       }
       return
@@ -545,9 +701,18 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
     const fallback = dragging.startHoldId ? rig.limbs[limb].lastStablePos : dragging.startPos
     rig.limbs[limb].pos = fallback
     rig.limbs[limb].holdId = dragging.startHoldId
-    setMessage('未抓到岩点：已回弹')
-    clearMessageSoon()
-  }, [arenaHolds, canvasRef, clearMessageSoon, nextHoldIndex, rawHolds])
+    setMissCount(count => {
+      const next = count + 1
+      if (next >= 3) {
+        setFailedAt(Date.now())
+        setMessage('岩壁松动，你被迫撤回营地。')
+      } else {
+        setMessage(`碎石滑落，抓握失败 ${next}/3`)
+        clearMessageSoon()
+      }
+      return next
+    })
+  }, [arenaHolds, canvasRef, clearMessageSoon, collectedFragments, fragmentTargetIds, handleWin, nextHoldIndex, rawHolds, reachForLimb, rootForLimb])
 
   const onPointerCancel = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     onPointerUp(e)
@@ -661,41 +826,53 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
       // 渲染
       ctx.clearRect(0, 0, rect.width, rect.height)
 
-      // 背景
-      ctx.save()
-      ctx.fillStyle = '#DCCCB1'
-      ctx.fillRect(0, 0, rect.width, rect.height)
-      ctx.restore()
+      drawRuinsBackground(ctx, rect.width, rect.height)
 
-      // 岩点
+      // 遗迹石块
       for (const h of arenaHolds) renderHoldSimple(ctx, h)
 
+      // 文明残片
+      for (const h of arenaHolds) {
+        if (fragmentTargetIds.has(h.id)) {
+          drawFragment(ctx, h.center, collectedFragments.has(h.id))
+        }
+      }
+
       // 起/终/下一点
-      if (arenaHolds[0]) drawMarker(ctx, arenaHolds[0].center, '起', '#22C55E')
-      if (arenaHolds[arenaHolds.length - 1]) drawMarker(ctx, arenaHolds[arenaHolds.length - 1].center, '终', '#EF4444')
-      if (arenaHolds[nextHoldIndex]) drawMarker(ctx, arenaHolds[nextHoldIndex].center, `${nextHoldIndex + 1}`, '#38BDF8')
+      if (arenaHolds[0]) drawMarker(ctx, arenaHolds[0].center, '营', '#65A30D')
+      if (arenaHolds[arenaHolds.length - 1]) drawMarker(ctx, arenaHolds[arenaHolds.length - 1].center, '门', '#D97706')
+      if (arenaHolds[nextHoldIndex]) drawMarker(ctx, arenaHolds[nextHoldIndex].center, `${nextHoldIndex + 1}`, '#FBBF24')
 
       const dragging = draggingRef.current
       const draggingLimb = dragging?.limb ?? null
       const dragHint = (() => {
         if (!draggingLimb) return undefined
         const target = rig.limbs[draggingLimb].pos
-        const root = (draggingLimb === 'leftHand' || draggingLimb === 'rightHand') ? rig.shoulder : rig.hip
-        const reachable = (draggingLimb === 'leftHand' || draggingLimb === 'rightHand')
-          ? dist(root, target) <= upperArm + forearm + 0.001
-          : dist(root, target) <= upperLeg + lowerLeg + 0.001
+        const root = rootForLimb(rig, draggingLimb)
+        const reachable = dist(root, target) <= reachForLimb(draggingLimb) + 0.001
         return { limb: draggingLimb, root, target, reachable }
       })()
 
-      drawRig(ctx, rig, stableInfo.hull, com, stableInfo.stable, characterColor, draggingLimb, dragHint)
+      drawRig(
+        ctx,
+        rig,
+        stableInfo.hull,
+        com,
+        stableInfo.stable,
+        characterColor,
+        draggingLimb,
+        reachForLimb('leftHand'),
+        reachForLimb('leftFoot'),
+        dragHint
+      )
 
       // 顶部提示：不稳定但不掉落
       if (support.length >= 3 && !stableInfo.stable) {
         ctx.save()
-        ctx.fillStyle = 'rgba(239,68,68,0.85)'
+        ctx.fillStyle = 'rgba(127,29,29,0.88)'
         ctx.font = 'bold 14px system-ui, -apple-system, sans-serif'
         ctx.textAlign = 'center'
-        ctx.fillText('⚠ 重心越界：可继续拖拽调整姿态', rect.width / 2, 28)
+        ctx.fillText('重心偏移：调整姿态，避开松动岩面', rect.width / 2, 28)
         ctx.restore()
       }
 
@@ -704,9 +881,9 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
 
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
-  }, [arenaHolds, arenaTransform?.scale, canvasRef, characterColor, getContext, nextHoldIndex])
+  }, [arenaHolds, arenaTransform?.scale, canvasRef, characterColor, collectedFragments, fragmentTargetIds, getContext, nextHoldIndex, reachForLimb, rootForLimb])
 
-  const elapsed = (finishedAt ?? Date.now()) - startAt
+  const elapsed = (finishedAt ?? failedAt ?? Date.now()) - startAt
   const stabilityLabel = (() => {
     const s = stableInfoRef.current
     if (s.supportCount < 3) return '支撑点不足'
@@ -714,40 +891,39 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
   })()
 
   return (
-    <div className="fixed inset-0 bg-gray-900 text-white flex flex-col">
+    <div className="fixed inset-0 museum-shell flex flex-col">
       {/* Header */}
-      <div className="bg-gray-800 p-4 border-b border-gray-700">
+      <div className="museum-header p-4 border-b">
         <div className="flex items-center justify-between">
-          <button onClick={onBack} className="p-2 text-gray-400 hover:text-white transition-colors">
+          <button onClick={onBack} className="p-2 text-[#6b4a2f] hover:text-[#3a2a1e] transition-colors">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
 
           <h1 className="text-lg font-semibold flex items-center gap-2">
-            <span>🧗</span>
-            攀爬游戏（响应式拖拽）
+            <span>{currentLevel.title}</span>
           </h1>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() => resetRound()}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 museum-button text-sm"
             >
-              重开本局
+              重新勘探
             </button>
             <button
               onClick={onRestart}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+              className="px-3 py-2 museum-button text-sm"
             >
-              新线路
+              新岩壁
             </button>
           </div>
         </div>
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 relative bg-black">
+      <div className="flex-1 relative bg-[#efe5d3]">
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full"
@@ -759,32 +935,65 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
         />
 
         {message && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 border border-white/10 px-4 py-2 rounded-lg text-sm">
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-[#f8efe2]/90 border border-[#6f4f34]/35 px-4 py-2 rounded-lg text-sm text-[#3a2a1e] shadow-sm">
             {message}
           </div>
         )}
 
         {finishedAt && (
           <div className="absolute inset-0 flex items-center justify-center p-4">
-            <div className="bg-gray-900/90 border border-white/10 rounded-xl p-6 max-w-sm w-full text-center">
-              <h2 className="text-2xl font-semibold mb-2">完成线路！</h2>
-              <div className="text-gray-300 text-sm space-y-1 mb-5">
-                <div>用时：{formatTime(elapsed)}</div>
-                <div>步数：{stepCount}</div>
-                <div>评分（占位）：{Math.max(0, 1000 - stepCount * 20)}</div>
+            <div className="museum-panel border rounded-xl p-6 max-w-sm w-full text-center shadow-2xl">
+              <h2 className="text-2xl font-semibold mb-2 text-[#7a4c1f]">你抵达了遗迹入口。</h2>
+              <p className="text-[#715f4c] text-sm mb-4">古墓机关已被激活，新的道路开启了。</p>
+              <div className="text-[#4d3a2a] text-sm space-y-1 mb-5">
+                <div>勘探用时：{formatTime(elapsed)}</div>
+                <div>攀爬步数：{stepCount}</div>
+                <div>文明残片：{collectedFragments.size}/{fragmentTargetIds.size}</div>
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={onBack}
-                  className="flex-1 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                  className="flex-1 py-2 museum-button"
                 >
-                  返回预览
+                  返回岩壁
+                </button>
+                {isLastLevel ? (
+                  <button
+                    onClick={() => resetRound()}
+                    className="flex-1 py-2 museum-button-primary"
+                  >
+                    重新攀登
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => dispatch({ type: 'NEXT_LEVEL' })}
+                    className="flex-1 py-2 museum-button-primary"
+                  >
+                    下一关
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {failedAt && (
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="museum-panel border rounded-xl p-6 max-w-sm w-full text-center shadow-2xl">
+              <h2 className="text-2xl font-semibold mb-2 text-[#8a4a36]">勘探中断</h2>
+              <p className="text-[#4d3a2a] text-sm mb-5">碎石滑落，绳索失衡，你被迫撤回营地。</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={onBack}
+                  className="flex-1 py-2 museum-button"
+                >
+                  返回岩壁
                 </button>
                 <button
                   onClick={() => resetRound()}
-                  className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg transition-colors"
+                  className="flex-1 py-2 museum-button-danger"
                 >
-                  重来一局
+                  重新开始
                 </button>
               </div>
             </div>
@@ -793,36 +1002,51 @@ export const ClimbGame: React.FC<ClimbGameProps> = ({ onBack, onRestart }) => {
       </div>
 
       {/* Control panel */}
-      <div className="bg-gray-800 border-t border-gray-700 p-4">
+      <div className="museum-panel border-t p-4">
         <div className="max-w-md mx-auto space-y-3">
-          <div className="flex items-center justify-between text-sm text-gray-300">
-            <div>下一点：#{Math.min(nextHoldIndex + 1, rawHolds.length)}</div>
+          <div className="flex items-center justify-between text-sm text-[#4d3a2a]">
+            <div>石刻线索：#{Math.min(nextHoldIndex + 1, rawHolds.length)}</div>
             <div>用时：{formatTime(elapsed)}</div>
-            <div>步数：{stepCount}</div>
+            <div>残片：{collectedFragments.size}/{fragmentTargetIds.size}</div>
+            <div>松动：{missCount}/3</div>
           </div>
 
           <div className="flex items-center justify-between gap-3 text-sm">
-            <label className="text-gray-400">角色颜色</label>
+            <label className="text-[#715f4c]">调查员标记</label>
             <input
               type="color"
               value={characterColor}
               onChange={(e) => setCharacterColor(e.target.value)}
               className="h-9 w-14 bg-transparent"
-              disabled={!!finishedAt}
-              title="角色颜色"
+              disabled={!!finishedAt || !!failedAt}
+              title="调查员颜色"
             />
-            <div className={`text-xs ${stabilityLabel === '稳定' ? 'text-green-400' : 'text-red-400'}`}>
+            <div className={`text-xs ${stabilityLabel === '稳定' ? 'text-[#59663a]' : 'text-[#8a4a36]'}`}>
               {stabilityLabel}
             </div>
           </div>
 
           {arenaHolds.length < 2 && (
-            <p className="text-xs text-gray-400">
-              需要至少 2 个岩点（起点/终点）才能开始游戏。
+            <p className="text-xs text-[#715f4c]">
+              需要至少 2 个遗迹石块（营地/入口）才能开始勘探。
             </p>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+export const ArchaeologyClimbMiniGame: React.FC<Pick<ClimbGameProps, 'onComplete'>> = ({ onComplete }) => {
+  const [gameKey, setGameKey] = useState(0)
+
+  return (
+    <GameProvider key={gameKey}>
+      <ClimbGame
+        onBack={() => undefined}
+        onRestart={() => setGameKey(key => key + 1)}
+        onComplete={onComplete}
+      />
+    </GameProvider>
   )
 }

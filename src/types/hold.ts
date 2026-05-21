@@ -39,6 +39,7 @@ export interface GameState {
   stage: 'camera' | 'drawing' | 'preview' | 'game'
   backgroundImage: string | null
   holds: Hold[]
+  currentLevelIndex: number
   drawing: DrawingState
   selectedHoldId: string | null
 }

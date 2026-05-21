@@ -2,6 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .museum-shell {
+    @apply bg-[#efe5d3] text-[#3a2a1e];
+  }
+
+  .museum-header {
+    @apply bg-[#f4ead8]/95 border-[#6f4f34]/35 text-[#3a2a1e];
+    box-shadow: 0 1px 0 rgba(86, 58, 36, 0.16);
+  }
+
+  .museum-panel {
+    @apply bg-[#f6eddf]/95 border-[#6f4f34]/35 text-[#3a2a1e];
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  }
+
+  .museum-button {
+    @apply rounded-lg border border-[#6f4f34]/35 bg-[#efe4d2] text-[#3a2a1e] font-medium transition-colors;
+  }
+
+  .museum-button:hover {
+    background: #e4d4bf;
+  }
+
+  .museum-button-primary {
+    @apply rounded-lg border border-[#6f4f34]/45 bg-[#b27a39] text-[#fff8ec] font-semibold transition-colors;
+  }
+
+  .museum-button-primary:hover {
+    background: #9b6930;
+  }
+
+  .museum-button-danger {
+    @apply rounded-lg border border-[#8a4a36]/45 bg-[#9b5138] text-[#fff8ec] font-semibold transition-colors;
+  }
+
+  .museum-button-danger:hover {
+    background: #844331;
+  }
+}
+
 * {
   user-select: none;
   -webkit-user-select: none;
@@ -57,7 +97,7 @@ input[type="range"]::-webkit-slider-track {
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  background: #22D3EE;
+  background: #D97706;
   height: 20px;
   width: 20px;
   border-radius: 50%;
@@ -73,7 +113,7 @@ input[type="range"]::-moz-range-track {
 }
 
 input[type="range"]::-moz-range-thumb {
-  background: #22D3EE;
+  background: #D97706;
   height: 20px;
   width: 20px;
   border-radius: 50%;
@@ -115,7 +155,7 @@ button:disabled:active {
 
 /* Neon glow effect for debug */
 .neon-glow {
-  text-shadow: 0 0 10px #22D3EE, 0 0 20px #22D3EE, 0 0 30px #22D3EE;
+  text-shadow: 0 0 10px #D97706, 0 0 20px #D97706, 0 0 30px #D97706;
 }
 
 /* Loading animation */
